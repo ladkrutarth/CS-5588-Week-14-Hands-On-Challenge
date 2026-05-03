@@ -1,6 +1,7 @@
 """
-AI Speech Intelligence System - Main Streamlit Application
-Smart Meeting & Lecture Assistant powered by openai/whisper-small
+AI Speech Intelligence Platform v2.0
+Real-Time Multilingual Meeting Intelligence Platform
+Enhanced for Week 15 Final Challenge
 """
 
 import streamlit as st
@@ -8,427 +9,492 @@ import numpy as np
 import time
 import plotly.graph_objects as go
 import plotly.express as px
+import pandas as pd
+from datetime import datetime
+import os
+import json
+
+# Import local modules
+from src import config
+from src.models.whisper_model import WhisperASR
+from src.models.nlp_pipeline import NLPPipeline
+from src.models.evaluation import TranscriptionEvaluator
+from src.models.tts_model import SpeechTTS
+from src.utils.audio_utils import load_audio, get_audio_info, preprocess_audio, compute_waveform_data
+from src.utils.noise_augmentation import apply_noise_preset, NOISE_PRESETS
+from src.utils.responsible_ai import scan_sensitive_content, detect_transcription_bias, get_model_card, log_usage_event
+from src.utils.tts_engine import LocalTTSEngine
 
 # -- Page Config --
 st.set_page_config(
-    page_title="AI Speech Intelligence System",
-    page_icon="🎙️",
+    page_title=f"{config.APP_NAME} v{config.APP_VERSION}",
+    page_icon=config.APP_ICON,
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# -- Custom CSS --
-st.markdown("""
+# -- Premium CSS --
+st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-* { font-family: 'Inter', sans-serif; }
-.main-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 2rem; border-radius: 16px; margin-bottom: 2rem;
-    color: white; text-align: center;
-}
-.main-header h1 { font-size: 2.2rem; font-weight: 700; margin: 0; }
-.main-header p { opacity: 0.9; font-size: 1.1rem; }
-.metric-card {
-    background: linear-gradient(135deg, #1a1a2e, #16213e);
-    padding: 1.2rem; border-radius: 12px; border: 1px solid #334155;
-    text-align: center; color: white;
-}
-.metric-card h3 { font-size: 0.85rem; color: #94a3b8; margin: 0 0 0.3rem 0; }
-.metric-card p { font-size: 1.5rem; font-weight: 700; margin: 0;
-    background: linear-gradient(90deg, #667eea, #764ba2);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.result-box {
-    background: #0f172a; border: 1px solid #334155; border-radius: 12px;
-    padding: 1.5rem; margin: 1rem 0; color: #e2e8f0;
-}
-.action-item { background: #1e293b; border-left: 3px solid #667eea;
-    padding: 0.6rem 1rem; margin: 0.4rem 0; border-radius: 0 8px 8px 0; color: #e2e8f0; }
-.sentiment-pos { color: #4ade80; font-weight: 600; }
-.sentiment-neg { color: #f87171; font-weight: 600; }
-.stTabs [data-baseweb="tab-list"] { gap: 8px; }
-.stTabs [data-baseweb="tab"] {
-    background: #1e293b; border-radius: 8px; color: #94a3b8;
-    padding: 8px 20px; border: 1px solid #334155;
-}
-.stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #667eea, #764ba2) !important;
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+* {{ font-family: 'Outfit', sans-serif; }}
+
+.stApp {{
+    background-color: {config.THEME['dark_bg']};
+    color: {config.THEME['text_primary']};
+}}
+
+.main-header {{
+    background: {config.THEME['primary_gradient']};
+    padding: 3rem 2rem;
+    border-radius: 24px;
+    margin-bottom: 2.5rem;
+    color: white;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}}
+
+.glass-card {{
+    background: {config.THEME['card_bg']};
+    backdrop-filter: blur(10px);
+    border: 1px solid {config.THEME['card_border']};
+    border-radius: 20px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    transition: transform 0.3s ease;
+}}
+
+.glass-card:hover {{
+    transform: translateY(-5px);
+    border-color: rgba(102, 126, 234, 0.5);
+}}
+
+.metric-value {{
+    font-size: 2rem;
+    font-weight: 700;
+    background: {config.THEME['accent_gradient']};
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}}
+
+.status-badge {{
+    padding: 0.2rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    display: inline-block;
+    margin-bottom: 0.5rem;
+}}
+
+.status-success {{ background: rgba(74, 222, 128, 0.2); color: #4ade80; border: 1px solid #4ade80; }}
+.status-warning {{ background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid #fbbf24; }}
+
+.action-item {{
+    border-left: 4px solid #667eea;
+    padding: 1rem;
+    margin: 0.8rem 0;
+    background: rgba(255,255,255,0.03);
+    border-radius: 0 12px 12px 0;
+}}
+
+/* Custom Tabs */
+.stTabs [data-baseweb="tab-list"] {{ gap: 12px; }}
+.stTabs [data-baseweb="tab"] {{
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px 12px 0 0;
+    padding: 10px 24px;
+    color: {config.THEME['text_secondary']};
+}}
+.stTabs [aria-selected="true"] {{
+    background: {config.THEME['primary_gradient']} !important;
     color: white !important;
-}
+}}
 </style>
 """, unsafe_allow_html=True)
 
-
-# ------------------------------------------------------------------ #
-#  Model Loading (cached)
-# ------------------------------------------------------------------ #
+# -- Resource Caching --
 @st.cache_resource
-def load_whisper():
-    from models.whisper_model import WhisperASR
+def get_whisper():
     model = WhisperASR()
     model.load_model()
     return model
 
 @st.cache_resource
-def load_nlp(device, quick_mode=True):
-    from models.nlp_pipeline import NLPPipeline
+def get_nlp(device, quick_mode=True):
     return NLPPipeline(device=device, quick_mode=quick_mode)
 
-def load_evaluator():
-    from models.evaluation import TranscriptionEvaluator
+@st.cache_resource
+def get_tts(device):
+    return SpeechTTS(device=device)
+
+@st.cache_resource
+def get_local_tts():
+    return LocalTTSEngine()
+
+def get_evaluator():
     return TranscriptionEvaluator()
 
+# -- Session State --
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "current_result" not in st.session_state:
+    st.session_state.current_result = None
 
-# ------------------------------------------------------------------ #
-#  Header
-# ------------------------------------------------------------------ #
-st.markdown("""
+# -- Sidebar Settings --
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/microphone.png", width=80)
+    st.title("Settings")
+    
+    with st.expander("🌍 Language & Task", expanded=True):
+        whisper_language_codes = {
+            "English": "en",
+            "Spanish": "es",
+            "French": "fr",
+            "German": "de",
+            "Chinese": "zh",
+            "Japanese": "ja",
+            "Arabic": "ar",
+            "Hindi": "hi",
+            "Portuguese": "pt",
+            "Russian": "ru",
+        }
+        src_lang = st.selectbox("Source Language", ["Auto Detect"] + list(whisper_language_codes.keys()))
+        task = st.radio("Task", ["Transcribe", "Translate to English"])
+        lang_code = whisper_language_codes.get(src_lang) if src_lang != "Auto Detect" else None
+    
+    with st.expander("⚡ Performance", expanded=False):
+        beam_size = st.slider("Beam Size", 1, 10, config.DEFAULT_BEAM_SIZE)
+        use_fp16 = st.checkbox("Use FP16 (GPU only)", value=True)
+        quick_nlp = st.checkbox("Quick NLP Mode", value=True)
+    
+    with st.expander("🛡️ Safety & Ethics", expanded=False):
+        enable_pii_scan = st.checkbox("Scan for Sensitive Data", value=True)
+        show_model_card = st.button("View AI Transparency Card")
+    
+    st.markdown("---")
+    st.info(f"System: **{config.APP_NAME}**\nVersion: **{config.APP_VERSION}**")
+
+# -- Header --
+st.markdown(f"""
 <div class="main-header">
-    <h1>🎙️ AI Speech Intelligence System</h1>
-    <p>GPU-Accelerated Meeting & Lecture Assistant · Powered by OpenAI Whisper-small</p>
+    <h1>{config.APP_ICON} {config.APP_NAME}</h1>
+    <p>{config.APP_DESCRIPTION}</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ------------------------------------------------------------------ #
-#  Sidebar
-# ------------------------------------------------------------------ #
-with st.sidebar:
-    st.markdown("## ⚙️ Settings")
+# -- Mode Switch (tab-like) --
+app_mode = st.radio(
+    "Workspace",
+    ["🎙️ Speech Intelligence", "🗣️ Text-to-Speech"],
+    horizontal=True,
+)
 
-    language = st.selectbox("Source Language", [
-        "Auto Detect", "English", "Spanish", "French", "German",
-        "Chinese", "Japanese", "Arabic", "Hindi", "Portuguese", "Russian"
-    ])
-    lang_code_map = {
-        "Auto Detect": None, "English": "en", "Spanish": "es",
-        "French": "fr", "German": "de", "Chinese": "zh",
-        "Japanese": "ja", "Arabic": "ar", "Hindi": "hi",
-        "Portuguese": "pt", "Russian": "ru",
+if app_mode == "🗣️ Text-to-Speech":
+    st.markdown("### 🗣️ Text-to-Speech (Local)")
+    st.caption("Dedicated multilingual TTS workspace with professional male/female voice options.")
+    tts_language_codes = {
+        "English": "en",
+        "Spanish": "es",
+        "French": "fr",
+        "German": "de",
+        "Portuguese": "pt",
+        "Hindi": "hi",
+        "Japanese": "ja",
+        "Chinese": "zh",
+        "Arabic": "ar",
+        "Russian": "ru",
     }
-    lang_code = lang_code_map[language]
 
-    task = st.radio("Whisper Task", ["Transcribe", "Translate to English"])
-    whisper_task = "transcribe" if task == "Transcribe" else "translate"
-
-    st.markdown("---")
-    st.markdown("### 📊 Evaluation Settings")
-    run_eval = st.checkbox("Run Baseline vs Improved Comparison", value=False)
-    ref_text = st.text_area("Reference Text (for WER)", "", height=100,
-                            help="Paste ground-truth text to compute WER")
-
-    st.markdown("---")
-    st.markdown("### 🔊 Noise Testing")
-    from utils.noise_augmentation import NOISE_PRESETS
-    noise_preset = st.selectbox("Noise Preset", list(NOISE_PRESETS.keys()))
-
-    st.markdown("---")
-    st.markdown("### 🌐 Translation")
-    translate_output = st.checkbox("Translate Output", value=False)
-    target_lang = st.selectbox("Target Language", [
-        "Spanish", "French", "German", "Chinese",
-        "Japanese", "Arabic", "Hindi", "Portuguese", "Russian"
-    ])
-
-    st.markdown("---")
-    st.markdown("### ⚡ Performance")
-    quick_mode = st.checkbox(
-        "Quick Mode (faster NLP outputs)",
-        value=True,
-        help="Uses faster summary/analysis settings for quick results."
+    tts_text = st.text_area(
+        "Enter text to synthesize",
+        value="Welcome to the AI Speech Intelligence Platform.",
+        height=120,
     )
+    preset_col1, preset_col2, preset_col3 = st.columns(3)
+    with preset_col1:
+        voice_gender = st.selectbox("Voice Gender", ["Female", "Male"], index=0)
+    with preset_col2:
+        tts_language = st.selectbox(
+            "Speech Language",
+            [
+                "English", "Spanish", "French", "German", "Portuguese", "Hindi",
+                "Japanese", "Chinese", "Arabic", "Russian"
+            ],
+            index=0,
+        )
+    with preset_col3:
+        tts_rate = st.slider("Speech rate", min_value=120, max_value=220, value=165, step=5)
+    selected_voice_id = None
 
-    st.markdown("---")
-    # Device info
-    st.markdown("### 💻 System Info")
     try:
-        whisper = load_whisper()
-        info = whisper.get_device_info()
-        st.success(f"Device: **{info['device'].upper()}**")
-        if "gpu_name" in info:
-            st.info(f"GPU: {info['gpu_name']}")
+        local_tts = get_local_tts()
+        voices = local_tts.get_professional_voice_options(
+            gender=voice_gender.lower(),
+            language=tts_language_codes.get(tts_language, "en"),
+        )
+        if voices:
+            labels = []
+            for v in voices:
+                parts = [v.name]
+                if v.gender != "unknown":
+                    parts.append(v.gender)
+                if v.locale != "unknown":
+                    parts.append(v.locale)
+                labels.append(" | ".join(parts))
+            selected_voice_name = st.selectbox("Professional Voice", labels, key="tts_voice_select")
+            idx = labels.index(selected_voice_name)
+            selected_voice_id = voices[idx].id
+            st.caption("Tip: set language first, then choose a matching male/female voice.")
+        else:
+            st.warning("No matching voices found for this language/gender. Try English or switch gender.")
     except Exception as e:
-        st.error(f"Model loading issue: {e}")
+        st.warning(f"Local TTS setup issue: {e}")
 
-# ------------------------------------------------------------------ #
-#  Main Area - Audio Input
-# ------------------------------------------------------------------ #
-st.markdown("## 🎧 Audio Input")
-input_tabs = st.tabs(["📁 Upload File", "🎤 Record from Microphone"])
-
-uploaded = None
-mic_audio = None
-
-with input_tabs[0]:
-    uploaded = st.file_uploader(
-        "Upload an audio file (WAV, MP3, M4A, FLAC, OGG)",
-        type=["wav", "mp3", "m4a", "flac", "ogg"],
-        help="Whisper works best with clear speech audio at 16kHz"
-    )
-
-with input_tabs[1]:
-    if hasattr(st, "audio_input"):
-        mic_audio = st.audio_input("Record live speech and click stop")
-        st.caption("After recording, click 'Run Speech Intelligence Pipeline'.")
-    else:
-        st.warning("Your Streamlit version does not support microphone input (`st.audio_input`).")
-        st.info("Use file upload mode or upgrade Streamlit.")
-
-selected_audio = uploaded if uploaded is not None else mic_audio
-
-if selected_audio is not None:
-    if uploaded is not None:
-        st.audio(uploaded, format=f"audio/{uploaded.name.split('.')[-1]}")
-    else:
-        st.audio(mic_audio)
-
-    # Load and process audio
-    from utils.audio_utils import load_audio, get_audio_info
-    from utils.noise_augmentation import apply_noise_preset
-
-    with st.spinner("🔄 Loading audio..."):
-        audio_bytes = selected_audio.read()
-        audio, sr = load_audio(audio_bytes)
-        audio_info = get_audio_info(audio, sr)
-
-    # Display audio metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f'<div class="metric-card"><h3>Duration</h3><p>{audio_info["duration_seconds"]}s</p></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="metric-card"><h3>Sample Rate</h3><p>{audio_info["sampling_rate"]} Hz</p></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="metric-card"><h3>RMS Energy</h3><p>{audio_info["rms_energy"]}</p></div>', unsafe_allow_html=True)
-    with col4:
-        st.markdown(f'<div class="metric-card"><h3>Peak</h3><p>{audio_info["peak_amplitude"]}</p></div>', unsafe_allow_html=True)
-
-    # Apply noise if selected
-    processed_audio = apply_noise_preset(audio, noise_preset)
-
-    # ------------------------------------------------------------------ #
-    #  Transcription
-    # ------------------------------------------------------------------ #
-    if st.button("🚀 Run Speech Intelligence Pipeline", type="primary", use_container_width=True):
+    if st.button("🔊 Generate TTS Audio", use_container_width=True):
         try:
-            whisper = load_whisper()
-            nlp = load_nlp(whisper.device, quick_mode=quick_mode)
-            evaluator = load_evaluator()
+            audio_bytes = get_local_tts().synthesize_to_wav_bytes(
+                tts_text,
+                rate=tts_rate,
+                voice_id=selected_voice_id,
+                language=tts_language_codes.get(tts_language, "en"),
+            )
+            st.session_state["tts_audio_bytes"] = audio_bytes
+            st.success("Audio generated.")
         except Exception as e:
-            st.error(
-                "Model loading failed. This is usually caused by blocked Hugging Face access "
-                "or missing local model cache. Try again after disabling proxy or pre-downloading the model."
+            st.error(f"TTS failed: {e}")
+
+    if "tts_audio_bytes" in st.session_state:
+        st.audio(st.session_state["tts_audio_bytes"], format="audio/wav")
+        st.download_button(
+            "⬇️ Download TTS WAV",
+            data=st.session_state["tts_audio_bytes"],
+            file_name="tts_output.wav",
+            mime="audio/wav",
+        )
+    st.stop()
+
+if show_model_card:
+    st.info("### 🤖 AI Transparency Card")
+    card = get_model_card()
+    for m in card["models"]:
+        with st.expander(f"Model: {m['name']}"):
+            st.write(m)
+    st.markdown("---")
+
+# -- Main Interface --
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.markdown("### 📥 Input Selection")
+    input_type = st.tabs(["📁 File Upload", "🎤 Live Record"])
+    
+    audio_input = None
+    with input_type[0]:
+        uploaded_file = st.file_uploader("Upload Audio", type=["wav", "mp3", "m4a", "flac"])
+        if uploaded_file:
+            audio_input = uploaded_file.read()
+            
+    with input_type[1]:
+        if hasattr(st, "audio_input"):
+            mic_input = st.audio_input("Record now")
+            if mic_input:
+                audio_input = mic_input.read()
+        else:
+            st.warning("Microphone input not supported in this version.")
+
+with col2:
+    st.markdown("### 🛠️ Preprocessing")
+    do_normalize = st.checkbox("Normalize Volume", value=True)
+    do_bandpass = st.checkbox("Speech Enhancement Filter", value=True)
+    do_trim = st.checkbox("Trim Silence", value=True)
+    noise_test = st.selectbox("Inject Noise (Evaluation only)", list(NOISE_PRESETS.keys()))
+
+# -- Execution --
+if audio_input:
+    st.markdown("---")
+    
+    if st.button("🚀 Process Intelligence Pipeline", type="primary", use_container_width=True):
+        progress_bar = st.progress(0, "Loading Engine...")
+        
+        try:
+            # 1. Load Audio
+            progress_bar.progress(10, "Loading Audio...")
+            raw_audio, sr = load_audio(audio_input)
+            
+            # 2. Preprocess
+            progress_bar.progress(20, "Applying Signal Processing...")
+            processed_audio = preprocess_audio(
+                raw_audio, sr, trim=do_trim, normalize=do_normalize, bandpass=do_bandpass
             )
-            st.exception(e)
-            st.stop()
-
-        # -- Step 1: Transcribe --
-        with st.spinner("🎤 Transcribing with Whisper-small..."):
-            result = whisper.transcribe(
-                processed_audio, sr, language=lang_code, task=whisper_task
+            if noise_test != "Clean (No Noise)":
+                processed_audio = apply_noise_preset(processed_audio, noise_test)
+                
+            audio_info = get_audio_info(processed_audio, sr)
+            waveform = compute_waveform_data(processed_audio, sr)
+            
+            # 3. Transcription
+            progress_bar.progress(40, f"Transcribing with Whisper ({config.WHISPER_MODEL_ID})...")
+            whisper = get_whisper()
+            asr_start = time.time()
+            asr_result = whisper.transcribe_with_settings(
+                processed_audio, sr, language=lang_code, 
+                beam_size=beam_size, task=task.lower()
             )
-
-        transcript = result["text"]
-
-        # Store in session state
-        st.session_state["transcript"] = transcript
-        st.session_state["result"] = result
-
-        # -- Tabs for results --
-        tabs = st.tabs(["📝 Transcript", "📋 Summary", "✅ Action Items",
-                        "💭 Sentiment", "🏷️ Topics", "🌐 Translation", "📊 Evaluation"])
-
-        # Tab 1: Transcript
-        with tabs[0]:
-            st.markdown("### Transcription Result")
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Latency", f"{result['latency_seconds']}s")
-            col_b.metric("Device", result["device"].upper())
-            col_c.metric("Language", result["language"])
-            st.markdown(f'<div class="result-box">{transcript}</div>', unsafe_allow_html=True)
-
-        # Tab 2: Summary
-        with tabs[1]:
-            st.markdown("### AI Summary")
-            if len(transcript.split()) > 20:
-                with st.spinner("Generating summary..."):
-                    summary = nlp.summarize(transcript)
-                st.markdown(f'<div class="result-box">{summary}</div>', unsafe_allow_html=True)
-            else:
-                st.info("Text too short for summarization.")
-
-        # Tab 3: Action Items
-        with tabs[2]:
-            st.markdown("### Extracted Action Items")
-            with st.spinner("Extracting action items..."):
-                items = nlp.extract_action_items(transcript)
-            for i, item in enumerate(items, 1):
-                st.markdown(f'<div class="action-item">📌 <strong>{i}.</strong> {item}</div>', unsafe_allow_html=True)
-
-        # Tab 4: Sentiment
-        with tabs[3]:
-            st.markdown("### Sentiment Analysis")
-            with st.spinner("Analyzing sentiment..."):
-                sent = nlp.analyze_sentiment(transcript)
-
-            overall = sent["overall"]
-            cls = "sentiment-pos" if overall["label"] == "POSITIVE" else "sentiment-neg"
-            st.markdown(f'Overall: <span class="{cls}">{overall["label"]} ({overall["score"]:.1%})</span>', unsafe_allow_html=True)
-
-            bd = sent["breakdown"]
-            fig = go.Figure(data=[go.Pie(
-                labels=["Positive", "Negative"],
-                values=[bd["positive_pct"], bd["negative_pct"]],
-                marker_colors=["#4ade80", "#f87171"],
-                hole=0.5,
-            )])
-            fig.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                height=300,
-                margin=dict(t=20, b=20, l=20, r=20),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            with st.expander("Sentence-level Details"):
-                for d in sent["details"]:
-                    c = "🟢" if d["label"] == "POSITIVE" else "🔴"
-                    st.markdown(f"{c} **{d['label']}** ({d['score']:.1%}): {d['sentence']}")
-
-        # Tab 5: Topics
-        with tabs[4]:
-            st.markdown("### Key Topics")
+            asr_latency = time.time() - asr_start
+            transcript = asr_result["text"]
+            
+            # 4. NLP Analysis
+            progress_bar.progress(70, "Extracting Intelligence...")
+            nlp = get_nlp(whisper.device, quick_mode=quick_nlp)
+            
+            summary = nlp.summarize(transcript)
+            action_items = nlp.extract_action_items(transcript)
+            sentiment = nlp.analyze_sentiment(transcript)
             topics = nlp.extract_key_topics(transcript)
-            if topics:
-                words, counts = zip(*topics)
-                fig = px.bar(x=list(words), y=list(counts),
-                             labels={"x": "Keyword", "y": "Frequency"},
-                             color=list(counts),
-                             color_continuous_scale="Viridis")
-                fig.update_layout(
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    height=350,
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            segments = nlp.segment_speaker_turns(transcript)
+            
+            # 5. Security Scan
+            progress_bar.progress(90, "Security & Bias Scan...")
+            security = scan_sensitive_content(transcript) if enable_pii_scan else {"has_sensitive_content": False}
+            bias = detect_transcription_bias(
+                transcript,
+                audio_info["duration_seconds"],
+                language=lang_code,
+            )
+            
+            # Finalize
+            progress_bar.progress(100, "Complete!")
+            
+            st.session_state.current_result = {
+                "transcript": transcript,
+                "summary": summary,
+                "action_items": action_items,
+                "sentiment": sentiment,
+                "topics": topics,
+                "segments": segments,
+                "audio_info": audio_info,
+                "waveform": waveform,
+                "security": security,
+                "bias": bias,
+                "latency": asr_latency,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Log event
+            log_usage_event("intelligence_pipeline", {"duration": audio_info["duration_seconds"], "latency": asr_latency})
+            
+            st.balloons()
+            
+        except Exception as e:
+            st.error(f"Pipeline Error: {str(e)}")
+            st.exception(e)
 
-        # Tab 6: Translation
-        with tabs[5]:
-            st.markdown(f"### Translation to {target_lang}")
-            if translate_output:
-                with st.spinner(f"Translating to {target_lang}..."):
-                    translated = nlp.translate(transcript, target_lang)
-                st.markdown(f'<div class="result-box">{translated}</div>', unsafe_allow_html=True)
-            else:
-                st.info("Enable 'Translate Output' in the sidebar to use this feature.")
+# -- Results Dashboard --
+if st.session_state.current_result:
+    res = st.session_state.current_result
+    
+    # Waveform Header
+    fig_wave = px.line(x=res["waveform"]["times"], y=res["waveform"]["amplitudes"],
+                      labels={"x": "Time (s)", "y": "Amplitude"},
+                      title="Audio Signal Analysis")
+    fig_wave.update_layout(template="plotly_dark", height=200, margin=dict(l=0, r=0, t=30, b=0),
+                          paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig_wave, use_container_width=True)
 
-        # Tab 7: Evaluation
-        with tabs[6]:
-            st.markdown("### Evaluation & Benchmarking")
+    # Metrics Row
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(f'<div class="glass-card"><h3>Duration</h3><p class="metric-value">{res["audio_info"]["duration_seconds"]}s</p></div>', unsafe_allow_html=True)
+    with m2:
+        st.markdown(f'<div class="glass-card"><h3>Latency</h3><p class="metric-value">{res["latency"]:.2f}s</p></div>', unsafe_allow_html=True)
+    with m3:
+        st.markdown(f'<div class="glass-card"><h3>SNR</h3><p class="metric-value">{res["audio_info"]["snr_estimate_db"]}dB</p></div>', unsafe_allow_html=True)
+    with m4:
+        st.markdown(f'<div class="glass-card"><h3>Sentiment</h3><p class="metric-value">{res["sentiment"]["overall"]["label"]}</p></div>', unsafe_allow_html=True)
 
-            if run_eval:
-                with st.spinner("⏱️ Running evaluation (baseline vs improved)..."):
-                    ref = ref_text.strip() if ref_text.strip() else None
-                    eval_results = evaluator.quick_evaluate(
-                        whisper, processed_audio, sr,
-                        reference_text=ref, language=lang_code
-                    )
+    # Tabs for detailed analysis
+    tab_trans, tab_sum, tab_action, tab_speaker, tab_sec, tab_biz = st.tabs([
+        "📝 Transcript", "📋 Summary", "✅ Actions", "👥 Speakers", "🛡️ Security", "💰 Business"
+    ])
+    
+    with tab_trans:
+        st.markdown(f'<div style="background:rgba(255,255,255,0.05); padding:20px; border-radius:15px; border:1px solid rgba(255,255,255,0.1);">{res["transcript"]}</div>', unsafe_allow_html=True)
+        if res["bias"]["has_issues"]:
+            st.warning("#### ⚠️ Quality Alerts")
+            for w in res["bias"]["warnings"]:
+                st.write(f"- **{w['type'].title()}**: {w['message']}")
 
-                for name, data in eval_results.items():
-                    with st.expander(f"📐 {name}", expanded=True):
-                        st.text(f"Transcription: {data['text'][:300]}...")
-                        st.metric("Latency", f"{data['latency_seconds']}s")
-                        if "wer_metrics" in data and data["wer_metrics"].get("wer") is not None:
-                            wcol1, wcol2, wcol3 = st.columns(3)
-                            wcol1.metric("WER", f"{data['wer_metrics']['wer']:.2%}")
-                            wcol2.metric("MER", f"{data['wer_metrics']['mer']:.2%}")
-                            wcol3.metric("WIL", f"{data['wer_metrics']['wil']:.2%}")
+    with tab_sum:
+        st.markdown("### AI Summary")
+        st.write(res["summary"])
+        
+        st.markdown("### 🏷️ Topics")
+        topic_df = pd.DataFrame(res["topics"], columns=["Keyword", "Frequency"])
+        fig_topics = px.bar(topic_df, x="Keyword", y="Frequency", color="Frequency", color_continuous_scale="Viridis")
+        fig_topics.update_layout(template="plotly_dark", height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_topics, use_container_width=True)
 
-                # Latency comparison chart
-                names = list(eval_results.keys())
-                latencies = [eval_results[n]["latency_seconds"] for n in names]
-                fig = go.Figure(data=[go.Bar(
-                    x=names, y=latencies,
-                    marker_color=["#667eea", "#764ba2"],
-                    text=[f"{l:.3f}s" for l in latencies],
-                    textposition="auto",
-                )])
-                fig.update_layout(
-                    title="Latency Comparison",
-                    yaxis_title="Seconds",
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    height=350,
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    with tab_action:
+        st.markdown("### Action Items")
+        for item in res["action_items"]:
+            st.markdown(f'<div class="action-item">📌 {item}</div>', unsafe_allow_html=True)
 
-                # WER comparison if reference provided
-                if ref_text.strip():
-                    wer_vals = []
-                    for n in names:
-                        w = eval_results[n].get("wer_metrics", {}).get("wer")
-                        wer_vals.append(w if w is not None else 0)
-                    fig2 = go.Figure(data=[go.Bar(
-                        x=names, y=wer_vals,
-                        marker_color=["#4ade80", "#f87171"],
-                        text=[f"{w:.2%}" for w in wer_vals],
-                        textposition="auto",
-                    )])
-                    fig2.update_layout(
-                        title="WER Comparison (Lower is Better)",
-                        yaxis_title="Word Error Rate",
-                        template="plotly_dark",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        height=350,
-                    )
-                    st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.info("Enable 'Run Baseline vs Improved Comparison' in sidebar.")
+    with tab_speaker:
+        st.markdown("### Speaker Diarization (Simulated)")
+        for seg in res["segments"]:
+            with st.chat_message(seg["speaker"]):
+                st.write(seg["text"])
+                st.caption(f"{seg['word_count']} words")
 
-            # Noise comparison section
-            st.markdown("---")
-            st.markdown("### 🔊 Noise Impact Analysis")
-            if st.button("Run Noise Comparison Test"):
-                noise_results = {}
-                progress = st.progress(0)
-                presets = list(NOISE_PRESETS.keys())
+    with tab_sec:
+        if res["security"]["has_sensitive_content"]:
+            st.error("### 🚨 Sensitive Data Detected")
+            for name, info in res["security"]["findings"].items():
+                st.write(f"**{name}**: {info['count']} instances found.")
+                st.info(f"Masked Examples: {', '.join(info['examples'])}")
+        else:
+            st.success("✅ No sensitive data patterns (SSN, Email, CC) detected.")
 
-                for i, preset in enumerate(presets):
-                    noisy = apply_noise_preset(audio, preset)
-                    r = whisper.transcribe(noisy, sr, language=lang_code, task=whisper_task)
-                    noise_results[preset] = r
-                    progress.progress((i + 1) / len(presets))
+    with tab_biz:
+        st.markdown("### 💰 ROI & Business Value")
+        saved_mins = res["audio_info"]["duration_seconds"] / 60 * 2 # Estimation: 2x audio duration saved
+        st.metric("Estimated Time Saved", f"{saved_mins:.1f} mins")
+        
+        st.markdown("#### Pricing Tiers")
+        pcols = st.columns(len(config.PRICING_TIERS))
+        for i, (name, tier) in enumerate(config.PRICING_TIERS.items()):
+            with pcols[i]:
+                st.markdown(f"""
+                <div style="background:{tier['color']}22; border:2px solid {tier['color']}; padding:20px; border-radius:20px; height:350px;">
+                    <h3 style="color:{tier['color']};">{name}</h3>
+                    <h2>{tier['price']}</h2>
+                    <ul style="font-size:0.8rem;">
+                        {''.join([f"<li>{f}</li>" for f in tier['features']])}
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
 
-                for preset, r in noise_results.items():
-                    with st.expander(f"🔊 {preset}"):
-                        st.metric("Latency", f"{r['latency_seconds']}s")
-                        st.markdown(f'<div class="result-box">{r["text"][:500]}</div>', unsafe_allow_html=True)
-                        if ref_text.strip():
-                            wm = evaluator.compute_wer(ref_text.strip(), r["text"])
-                            if wm.get("wer") is not None:
-                                st.metric("WER", f"{wm['wer']:.2%}")
+    # Export Section
+    st.markdown("---")
+    st.markdown("### 📤 Export Intelligence")
+    col_ex1, col_ex2 = st.columns(2)
+    with col_ex1:
+        st.download_button("Download Transcript (TXT)", res["transcript"], file_name="transcript.txt")
+    with col_ex2:
+        minutes = nlp.generate_meeting_minutes(res["transcript"], res["summary"], res["action_items"], res["sentiment"], res["topics"])
+        st.download_button("Download Meeting Minutes (MD)", minutes, file_name="minutes.md")
 
 else:
-    # Landing state
+    # Landing Page
     st.markdown("""
-    <div style="text-align:center; padding: 4rem 2rem; color: #94a3b8;">
-        <h2 style="color: #667eea;">Upload audio or record from microphone</h2>
-        <p style="font-size: 1.1rem;">Upload: WAV, MP3, M4A, FLAC, OGG | Mic: live recording</p>
-        <p>This system uses <strong>openai/whisper-small</strong> for GPU-accelerated speech recognition,
-        then applies NLP models for summarization, sentiment analysis, action items, and translation.</p>
+    <div style="text-align:center; padding: 5rem 2rem;">
+        <h2 style="font-size:2.5rem; margin-bottom:1rem;">Welcome to the Future of Meetings</h2>
+        <p style="font-size:1.2rem; color:#94a3b8; max-width:800px; margin:0 auto;">
+            Our AI-powered platform transforms raw audio into actionable business intelligence. 
+            Upload a recording to see the power of Whisper-Medium and our advanced NLP pipeline.
+        </p>
+        <div style="margin-top:3rem;">
+            <img src="https://img.icons8.com/fluency/240/artificial-intelligence.png" width="120" style="opacity:0.8;">
+        </div>
     </div>
     """, unsafe_allow_html=True)
-
-    st.markdown("### 🏗️ Pipeline Architecture")
-    st.markdown("""
-    ```
-    Audio Input → Whisper ASR (GPU) → Raw Transcript
-                                          ↓
-                    ┌─────────────────────┼──────────────────────┐
-                    ↓                     ↓                      ↓
-               Summarization      Sentiment Analysis       Translation
-               Action Items       Key Topics               WER Evaluation
-    ```
-    """)

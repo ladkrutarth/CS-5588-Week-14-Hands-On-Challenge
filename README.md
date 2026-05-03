@@ -1,11 +1,12 @@
 # AI Speech Intelligence System: Smart Meeting & Lecture Assistant
 
 ## 🎙️ Project Overview
-This project is a GPU-accelerated multimodal AI application designed to transform speech into actionable intelligence. It leverages **OpenAI's Whisper-small** model for high-fidelity speech-to-text and a suite of NLP models for downstream analysis including summarization, sentiment analysis, action item extraction, and translation.
+This project is a GPU-accelerated multimodal AI application designed to transform speech into actionable intelligence. It leverages **OpenAI's Whisper-medium** model for high-fidelity speech-to-text and a suite of NLP models for downstream analysis including summarization, sentiment analysis, action item extraction, and translation.
 
 ### Key Features
 - **Speech-to-Text**: Local, GPU-accelerated transcription using `openai/whisper-small`.
 - **Multilingual Support**: Automatic language detection and translation to English.
+- **Text-to-Speech (TTS)**: Convert transcribed text back to audio using `microsoft/speecht5_tts`.
 - **Smart Analytics**: 
     - Abstractive Summarization (BART)
     - Sentiment Analysis (DistilBERT)
@@ -34,19 +35,19 @@ The application uses a modular, local-first architecture that runs on your machi
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      Audio Preprocessing Layer                         │
-│  utils/audio_utils.py                                                  │
+│  src/utils/audio_utils.py                                              │
 │  - Decode file/mic bytes                                               │
 │  - Convert to mono, resample to 16kHz                                  │
 │  - Compute metadata (duration, RMS, peak)                              │
-│  utils/noise_augmentation.py                                           │
+│  src/utils/noise_augmentation.py                                       │
 │  - Optional clean/noise/reverb presets for robustness testing          │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                     Speech Model Layer (ASR)                           │
-│  models/whisper_model.py                                               │
-│  - Model: openai/whisper-small                                         │
+│  src/models/whisper_model.py                                           │
+│  - Model: openai/whisper-medium                                        │
 │  - Device auto-detect: CUDA / MPS / CPU                                │
 │  - GPU-first inference with safe decoding settings                      │
 │  - Proxy-safe loading + local cache fallback                            │
@@ -55,7 +56,7 @@ The application uses a modular, local-first architecture that runs on your machi
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                 Language Intelligence Layer (NLP)                      │
-│  models/nlp_pipeline.py                                                │
+│  src/models/nlp_pipeline.py                                            │
 │  - Summary (fast extractive in Quick Mode)                             │
 │  - Sentiment analysis                                                   │
 │  - Action item extraction (rule-based)                                 │
@@ -66,7 +67,7 @@ The application uses a modular, local-first architecture that runs on your machi
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    Evaluation & Visualization Layer                    │
-│  models/evaluation.py                                                  │
+│  src/models/evaluation.py                                              │
 │  - Baseline vs improved decoding comparison                             │
 │  - WER / MER / WIL + latency                                            │
 │  Streamlit + Plotly UI                                                  │
@@ -120,8 +121,8 @@ The application uses a modular, local-first architecture that runs on your machi
 
 4. **Run the CLI pipeline (for reproducible evaluation outputs)**:
    ```bash
-   python run_whisper_pipeline.py \
-     --audio path/to/sample.wav \
+   python scripts/run_whisper_pipeline.py \
+     --audio data/samples/meeting.wav \
      --task transcribe \
      --language auto \
      --require-gpu \
@@ -129,6 +130,30 @@ The application uses a modular, local-first architecture that runs on your machi
      --reference-text "paste ground truth text here" \
      --output-json outputs/sample_result.json
    ```
+
+5. **Run Phase 2 API server (STT + TTS endpoints)**:
+   ```bash
+   uvicorn api_server:app --host 0.0.0.0 --port 9000 --reload
+   ```
+
+## 🌐 Phase 2 API Endpoints
+
+- `GET /health`
+  - Returns service health status.
+
+- `POST /stt`
+  - Multipart form-data:
+    - `audio` (file): WAV/MP3/M4A/etc
+    - `language` (optional): Whisper code (`en`, `hi`, `es`, ...)
+    - `task` (optional): `transcribe` or `translate`
+  - Returns: transcript text, language, latency, device.
+
+- `POST /tts`
+  - Multipart form-data:
+    - `text` (required)
+    - `rate` (optional, default `170`)
+    - `voice_id` (optional)
+  - Returns: generated WAV audio stream.
 
 ## 🧭 Implementation Plan (Project Build)
 Use this plan exactly for your final submission workflow:
@@ -174,7 +199,7 @@ The application includes a dedicated evaluation tab to compare:
 - **Noise Sensitivity**: Comparative analysis of transcription accuracy in noisy vs. clean environments.
 
 ## 🤖 AI Tools Disclosure
-- **Models used**: `openai/whisper-small`, `facebook/bart-large-cnn`, `distilbert-base-uncased-finetuned-sst-2-english`, `Helsinki-NLP/opus-mt-en-*`.
+- **Models used**: `openai/whisper-medium`, `microsoft/speecht5_tts`, `facebook/bart-large-cnn`, `distilbert-base-uncased-finetuned-sst-2-english`, `Helsinki-NLP/opus-mt-en-*`.
 - **AI Assistance**: Cursor AI was used for architecture planning, code generation, debugging support, and documentation drafting.
 
 ## 🎞️ Suggested 10+ Slide Structure

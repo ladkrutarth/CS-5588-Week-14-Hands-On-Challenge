@@ -134,6 +134,128 @@ class WhisperASR:
             kwargs["do_sample"] = True
         return kwargs
 
+    @staticmethod
+    def _merge_with_overlap(previous_text: str, new_text: str, max_overlap_words: int = 20) -> str:
+        """
+        Merge two transcript chunks while removing duplicated overlap words.
+        """
+        prev_words = previous_text.split()
+        new_words = new_text.split()
+        if not prev_words:
+            return new_text
+        if not new_words:
+            return previous_text
+
+        max_k = min(max_overlap_words, len(prev_words), len(new_words))
+        overlap = 0
+        for k in range(max_k, 0, -1):
+            if prev_words[-k:] == new_words[:k]:
+                overlap = k
+                break
+        merged_words = prev_words + new_words[overlap:]
+        return " ".join(merged_words)
+
+    def _transcribe_single_pass(
+        self,
+        audio_array: np.ndarray,
+        sampling_rate: int,
+        language: str,
+        beam_size: int,
+        temperature: float,
+        task: str,
+    ) -> tuple[str, float]:
+        input_features = self.processor(
+            audio_array,
+            sampling_rate=sampling_rate,
+            return_tensors="pt",
+        ).input_features
+
+        if self.device != "cpu":
+            input_features = input_features.to(self.device)
+        if self.device == "cuda":
+            input_features = input_features.half()
+
+        gen_kwargs = self._generation_kwargs(
+            task=task,
+            language=language,
+            beam_size=beam_size,
+            temperature=temperature,
+        )
+
+        start = time.time()
+        with torch.no_grad():
+            predicted_ids = self.model.generate(input_features, **gen_kwargs)
+        latency = time.time() - start
+
+        transcription = self.processor.batch_decode(
+            predicted_ids, skip_special_tokens=True
+        )
+        text = transcription[0].strip()
+
+        if not text:
+            retry_kwargs = {
+                "max_new_tokens": min(220, getattr(self.model.config, "max_target_positions", 448) - 8),
+                "num_beams": 1,
+            }
+            if language:
+                retry_kwargs["language"] = language
+            if task:
+                retry_kwargs["task"] = task
+            with torch.no_grad():
+                predicted_ids = self.model.generate(input_features, **retry_kwargs)
+            transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)
+            text = transcription[0].strip()
+
+        return text, latency
+
+    def _transcribe_chunked(
+        self,
+        audio_array: np.ndarray,
+        sampling_rate: int,
+        language: str,
+        beam_size: int,
+        temperature: float,
+        task: str,
+    ) -> tuple[str, float]:
+        """
+        Chunk long audio to ensure full-file transcription coverage.
+        """
+        chunk_seconds = 28
+        overlap_seconds = 2
+        chunk_samples = int(chunk_seconds * sampling_rate)
+        overlap_samples = int(overlap_seconds * sampling_rate)
+        step = max(1, chunk_samples - overlap_samples)
+
+        chunks_text = []
+        total_latency = 0.0
+
+        for start_idx in range(0, len(audio_array), step):
+            end_idx = min(start_idx + chunk_samples, len(audio_array))
+            chunk = audio_array[start_idx:end_idx]
+            if len(chunk) < int(0.2 * sampling_rate):
+                continue
+            text, latency = self._transcribe_single_pass(
+                chunk,
+                sampling_rate=sampling_rate,
+                language=language,
+                beam_size=beam_size,
+                temperature=temperature,
+                task=task,
+            )
+            total_latency += latency
+            if text:
+                chunks_text.append(text)
+            if end_idx >= len(audio_array):
+                break
+
+        if not chunks_text:
+            return "", total_latency
+
+        merged = chunks_text[0]
+        for t in chunks_text[1:]:
+            merged = self._merge_with_overlap(merged, t)
+        return merged.strip(), total_latency
+
     def transcribe(
         self,
         audio_array: np.ndarray,
@@ -159,53 +281,25 @@ class WhisperASR:
         """
         self.load_model()
 
-        # Preprocess audio
-        input_features = self.processor(
-            audio_array,
-            sampling_rate=sampling_rate,
-            return_tensors="pt",
-        ).input_features
-
-        if self.device != "cpu":
-            input_features = input_features.to(self.device)
-        if self.device == "cuda":
-            input_features = input_features.half()
-
-        gen_kwargs = self._generation_kwargs(
-            task=task,
-            language=language,
-            beam_size=1,
-            temperature=0.0,
-        )
-        if return_timestamps:
-            gen_kwargs["return_timestamps"] = True
-
-        # Generate
-        start = time.time()
-        with torch.no_grad():
-            predicted_ids = self.model.generate(input_features, **gen_kwargs)
-        latency = time.time() - start
-
-        # Decode
-        transcription = self.processor.batch_decode(
-            predicted_ids, skip_special_tokens=True
-        )
-        text = transcription[0].strip()
-
-        # Retry once with a simpler decode setup if we receive an empty transcript.
-        if not text:
-            retry_kwargs = {
-                "max_new_tokens": min(220, getattr(self.model.config, "max_target_positions", 448) - 8),
-                "num_beams": 1,
-            }
-            if language:
-                retry_kwargs["language"] = language
-            if task:
-                retry_kwargs["task"] = task
-            with torch.no_grad():
-                predicted_ids = self.model.generate(input_features, **retry_kwargs)
-            transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)
-            text = transcription[0].strip()
+        duration_seconds = len(audio_array) / sampling_rate if sampling_rate > 0 else 0
+        if duration_seconds > 30:
+            text, latency = self._transcribe_chunked(
+                audio_array,
+                sampling_rate=sampling_rate,
+                language=language,
+                beam_size=1,
+                temperature=0.0,
+                task=task,
+            )
+        else:
+            text, latency = self._transcribe_single_pass(
+                audio_array,
+                sampling_rate=sampling_rate,
+                language=language,
+                beam_size=1,
+                temperature=0.0,
+                task=task,
+            )
 
         # Detect language from decoder output
         detected_lang = language or "auto-detected"
@@ -245,36 +339,28 @@ class WhisperASR:
             dict with transcription result and settings used.
         """
         self.load_model()
-
-        input_features = self.processor(
-            audio_array,
-            sampling_rate=sampling_rate,
-            return_tensors="pt",
-        ).input_features
-
-        if self.device != "cpu":
-            input_features = input_features.to(self.device)
-        if self.device == "cuda":
-            input_features = input_features.half()
-
-        gen_kwargs = self._generation_kwargs(
-            task=task,
-            language=language,
-            beam_size=beam_size,
-            temperature=temperature,
-        )
-
-        start = time.time()
-        with torch.no_grad():
-            predicted_ids = self.model.generate(input_features, **gen_kwargs)
-        latency = time.time() - start
-
-        transcription = self.processor.batch_decode(
-            predicted_ids, skip_special_tokens=True
-        )
+        duration_seconds = len(audio_array) / sampling_rate if sampling_rate > 0 else 0
+        if duration_seconds > 30:
+            text, latency = self._transcribe_chunked(
+                audio_array,
+                sampling_rate=sampling_rate,
+                language=language,
+                beam_size=beam_size,
+                temperature=temperature,
+                task=task,
+            )
+        else:
+            text, latency = self._transcribe_single_pass(
+                audio_array,
+                sampling_rate=sampling_rate,
+                language=language,
+                beam_size=beam_size,
+                temperature=temperature,
+                task=task,
+            )
 
         return {
-            "text": transcription[0].strip(),
+            "text": text,
             "language": language or "auto",
             "latency_seconds": round(latency, 3),
             "settings": {

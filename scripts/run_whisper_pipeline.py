@@ -10,11 +10,15 @@ import argparse
 import json
 from pathlib import Path
 
-from models.evaluation import TranscriptionEvaluator
-from models.nlp_pipeline import NLPPipeline
-from models.whisper_model import WhisperASR
-from utils.audio_utils import load_audio
-from utils.noise_augmentation import apply_noise_preset
+from src.models.evaluation import TranscriptionEvaluator
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+
+from src.models.nlp_pipeline import NLPPipeline
+from src.models.whisper_model import WhisperASR
+from src.utils.audio_utils import load_audio
+from src.utils.noise_augmentation import apply_noise_preset
 
 
 LANGUAGE_CHOICES = {

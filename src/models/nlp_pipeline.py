@@ -1,15 +1,20 @@
 """
-NLP Processing Pipeline
+NLP Processing Pipeline — Enhanced for Week 15
 Provides: summarization, action item extraction, sentiment analysis,
-translation, and key topic extraction from transcribed text.
+translation, key topic extraction, meeting minutes generation,
+and speaker turn segmentation from transcribed text.
 Uses Hugging Face transformers models.
 """
 
 import re
 import os
+import logging
 from contextlib import contextmanager
+from datetime import datetime
 import torch
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+
+logger = logging.getLogger(__name__)
 
 
 class NLPPipeline:
@@ -198,14 +203,22 @@ class NLPPipeline:
         # Overall sentiment (truncate to model max)
         word_cap = 180 if self.quick_mode else 500
         truncated = " ".join(text.split()[:word_cap])
-        overall = sentiment(truncated)[0]
+        overall = sentiment(
+            truncated,
+            truncation=True,
+            max_length=512,
+        )[0]
 
         # Per-sentence breakdown
         sentences = [s.strip() for s in re.split(r'[.!?]+', text) if len(s.strip()) > 5]
         details = []
         max_sentences = 8 if self.quick_mode else 20
         for sent in sentences[:max_sentences]:
-            result = sentiment(sent[:512])[0]
+            result = sentiment(
+                sent,
+                truncation=True,
+                max_length=512,
+            )[0]
             details.append({
                 "sentence": sent,
                 "label": result["label"],
@@ -344,6 +357,182 @@ class NLPPipeline:
         sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
         effective_top_n = 7 if self.quick_mode else top_n
         return sorted_words[:effective_top_n]
+
+    # ------------------------------------------------------------------ #
+    #  Speaker Turn Segmentation (Simulated Diarization)
+    # ------------------------------------------------------------------ #
+    def segment_speaker_turns(self, text: str) -> list:
+        """
+        Simulate speaker diarization by detecting speaker turn boundaries
+        based on discourse markers, sentence structure, and topic shifts.
+
+        This is a rule-based approximation — real diarization requires
+        audio-level analysis, but this provides useful structure for
+        meeting transcripts.
+
+        Args:
+            text: Transcribed text.
+
+        Returns:
+            List of dicts with speaker label, text segment, and word count.
+        """
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+        if not sentences:
+            return [{"speaker": "Speaker 1", "text": text, "word_count": len(text.split())}]
+
+        # Detect potential speaker changes based on discourse markers
+        turn_markers = [
+            r"^(so|well|okay|alright|right|now|actually|basically|honestly|look|listen)\b",
+            r"^(I think|I believe|In my opinion|From my perspective)",
+            r"^(yes|no|yeah|nah|absolutely|definitely|sure|exactly)\b",
+            r"^(but|however|although|on the other hand|conversely)",
+            r"^(thank you|thanks|great|perfect|wonderful|excellent)",
+        ]
+
+        segments = []
+        current_speaker = 1
+        current_text = []
+        sentences_since_change = 0
+        max_speakers = 4  # Limit simulated speakers
+
+        for sent in sentences:
+            is_turn = False
+
+            # Check for turn markers
+            for pattern in turn_markers:
+                if re.search(pattern, sent, re.IGNORECASE):
+                    if sentences_since_change >= 2:  # Minimum 2 sentences per turn
+                        is_turn = True
+                    break
+
+            # Also trigger on significant pause indicators
+            if sent.startswith("...") or sent.startswith("-"):
+                if sentences_since_change >= 2:
+                    is_turn = True
+
+            if is_turn and current_text:
+                segment_text = " ".join(current_text)
+                segments.append({
+                    "speaker": f"Speaker {current_speaker}",
+                    "text": segment_text,
+                    "word_count": len(segment_text.split()),
+                })
+                current_speaker = (current_speaker % max_speakers) + 1
+                current_text = [sent]
+                sentences_since_change = 0
+            else:
+                current_text.append(sent)
+                sentences_since_change += 1
+
+        # Add final segment
+        if current_text:
+            segment_text = " ".join(current_text)
+            segments.append({
+                "speaker": f"Speaker {current_speaker}",
+                "text": segment_text,
+                "word_count": len(segment_text.split()),
+            })
+
+        return segments
+
+    # ------------------------------------------------------------------ #
+    #  Meeting Minutes Generator
+    # ------------------------------------------------------------------ #
+    def generate_meeting_minutes(
+        self,
+        transcript: str,
+        summary: str = None,
+        action_items: list = None,
+        sentiment: dict = None,
+        topics: list = None,
+        metadata: dict = None,
+    ) -> str:
+        """
+        Generate structured meeting minutes document.
+
+        Args:
+            transcript: Full transcription.
+            summary: Pre-computed summary (optional).
+            action_items: Pre-computed action items (optional).
+            sentiment: Pre-computed sentiment (optional).
+            topics: Pre-computed topics (optional).
+            metadata: Additional meeting metadata (optional).
+
+        Returns:
+            Formatted meeting minutes as markdown string.
+        """
+        now = datetime.now()
+        meta = metadata or {}
+
+        minutes = []
+        minutes.append("# 📋 Meeting Minutes")
+        minutes.append(f"**Date:** {now.strftime('%B %d, %Y')}")
+        minutes.append(f"**Time:** {now.strftime('%I:%M %p')}")
+        if meta.get("duration"):
+            minutes.append(f"**Duration:** {meta['duration']}")
+        if meta.get("language"):
+            minutes.append(f"**Language:** {meta['language']}")
+        minutes.append(f"**Generated by:** AI Speech Intelligence Platform v2.0")
+        minutes.append("")
+
+        # Summary
+        minutes.append("## 📝 Executive Summary")
+        if summary and summary != transcript:
+            minutes.append(summary)
+        else:
+            # Auto-generate a quick summary
+            summary = self._fast_extractive_summary(transcript, max_sentences=3)
+            minutes.append(summary)
+        minutes.append("")
+
+        # Key Topics
+        if topics:
+            minutes.append("## 🏷️ Key Topics Discussed")
+            for word, count in topics[:7]:
+                minutes.append(f"- **{word.title()}** (mentioned {count}x)")
+            minutes.append("")
+
+        # Speaker Segments
+        segments = self.segment_speaker_turns(transcript)
+        if len(segments) > 1:
+            minutes.append("## 👥 Discussion Summary")
+            for seg in segments:
+                preview = seg["text"][:200] + "..." if len(seg["text"]) > 200 else seg["text"]
+                minutes.append(f"**{seg['speaker']}** ({seg['word_count']} words):")
+                minutes.append(f"> {preview}")
+                minutes.append("")
+
+        # Action Items
+        minutes.append("## ✅ Action Items")
+        if action_items:
+            for i, item in enumerate(action_items, 1):
+                if item != "No specific action items detected.":
+                    minutes.append(f"{i}. {item}")
+        else:
+            minutes.append("- No specific action items detected.")
+        minutes.append("")
+
+        # Sentiment
+        if sentiment:
+            minutes.append("## 💭 Meeting Tone")
+            overall = sentiment.get("overall", {})
+            label = overall.get("label", "N/A")
+            score = overall.get("score", 0)
+            bd = sentiment.get("breakdown", {})
+            minutes.append(f"- **Overall Sentiment:** {label} ({score:.0%} confidence)")
+            minutes.append(f"- **Positive statements:** {bd.get('positive_pct', 0):.0f}%")
+            minutes.append(f"- **Negative statements:** {bd.get('negative_pct', 0):.0f}%")
+            minutes.append("")
+
+        # Full Transcript
+        minutes.append("## 📄 Full Transcript")
+        minutes.append(f"> {transcript}")
+        minutes.append("")
+
+        minutes.append("---")
+        minutes.append(f"*Auto-generated on {now.strftime('%Y-%m-%d %H:%M:%S')} by AI Speech Intelligence Platform*")
+
+        return "\n".join(minutes)
 
     # ------------------------------------------------------------------ #
     #  Utility
