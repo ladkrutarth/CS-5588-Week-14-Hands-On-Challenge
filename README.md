@@ -25,55 +25,33 @@ This project is a GPU-accelerated multimodal AI application designed to transfor
 ### High-Level Architecture
 The application uses a modular, local-first architecture that runs on your machine with GPU acceleration.
 
-```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Streamlit Frontend (app.py)                    │
-│  - Upload audio or record from microphone                              │
-│  - User settings (language, task, quick mode, translation, evaluation) │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      Audio Preprocessing Layer                         │
-│  src/utils/audio_utils.py                                              │
-│  - Decode file/mic bytes                                               │
-│  - Convert to mono, resample to 16kHz                                  │
-│  - Compute metadata (duration, RMS, peak)                              │
-│  src/utils/noise_augmentation.py                                       │
-│  - Optional clean/noise/reverb presets for robustness testing          │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     Speech Model Layer (ASR)                           │
-│  src/models/whisper_model.py                                           │
-│  - Model: openai/whisper-medium                                        │
-│  - Device auto-detect: CUDA / MPS / CPU                                │
-│  - GPU-first inference with safe decoding settings                      │
-│  - Proxy-safe loading + local cache fallback                            │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                 Language Intelligence Layer (NLP)                      │
-│  src/models/nlp_pipeline.py                                            │
-│  - Summary (fast extractive in Quick Mode)                             │
-│  - Sentiment analysis                                                   │
-│  - Action item extraction (rule-based)                                 │
-│  - Topic extraction (frequency-based)                                  │
-│  - Translation with offline-safe fallback                               │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Evaluation & Visualization Layer                    │
-│  src/models/evaluation.py                                              │
-│  - Baseline vs improved decoding comparison                             │
-│  - WER / MER / WIL + latency                                            │
-│  Streamlit + Plotly UI                                                  │
-│  - Transcript, summary, sentiment chart, topics, translation, metrics   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    User((User)) --> App["🎙️ Streamlit Frontend <br/>(app.py)"]
+
+    subgraph Core ["📦 src/ (Core Intelligence)"]
+        App --> Pre["🛠️ Audio Preprocessing <br/>(src/utils/audio_utils.py)"]
+        Pre --> ASR["🧠 Speech Engine (ASR) <br/>(src/models/whisper_model.py)"]
+        ASR --> NLP["📝 Language Intelligence (NLP) <br/>(src/models/nlp_pipeline.py)"]
+        NLP --> Eval["📊 Evaluation & Metrics <br/>(src/models/evaluation.py)"]
+        Eval --> App
+    end
+
+    subgraph Models ["📂 data/ (Local Assets)"]
+        ASR --- Weights["local_models/"]
+        App --- Samples["samples/"]
+    end
+
+    subgraph Services ["☁️ External"]
+        ASR -.-> HF["Hugging Face Hub"]
+        NLP -.-> HF
+    end
+
+    style App fill:#667eea,color:#fff
+    style Core fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Models fill:#e1f5fe,stroke:#01579b
 ```
+
 
 ### Component Responsibilities
 1. **Input Layer**  
